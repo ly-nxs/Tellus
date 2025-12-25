@@ -1,0 +1,13 @@
+{
+	"required": true,
+	"package": "com.yucareux.terrariumplus.mixin.client",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"ExampleClientMixin",
+		"GuiGraphicsAccessor",
+		"PresetEditorMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

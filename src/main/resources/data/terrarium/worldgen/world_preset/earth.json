@@ -1,0 +1,50 @@
+{
+  "dimensions": {
+    "minecraft:overworld": {
+      "type": "terrarium:earth",
+      "generator": {
+        "type": "terrarium:earth",
+        "biome_source": {
+          "type": "terrarium:earth",
+          "settings": {
+            "world_scale": 35.0,
+            "terrestrial_height_scale": 1.0,
+            "oceanic_height_scale": 1.0,
+            "height_offset": 63,
+            "spawn_latitude": 27.9881,
+            "spawn_longitude": 86.925
+          }
+        },
+        "settings": {
+          "world_scale": 35.0,
+          "terrestrial_height_scale": 1.0,
+          "oceanic_height_scale": 1.0,
+          "height_offset": 63,
+          "spawn_latitude": 27.9881,
+          "spawn_longitude": 86.925
+        }
+      }
+    },
+    "minecraft:the_end": {
+      "type": "minecraft:the_end",
+      "generator": {
+        "type": "minecraft:noise",
+        "biome_source": {
+          "type": "minecraft:the_end"
+        },
+        "settings": "minecraft:end"
+      }
+    },
+    "minecraft:the_nether": {
+      "type": "minecraft:the_nether",
+      "generator": {
+        "type": "minecraft:noise",
+        "biome_source": {
+          "type": "minecraft:multi_noise",
+          "preset": "minecraft:nether"
+        },
+        "settings": "minecraft:nether"
+      }
+    }
+  }
+}

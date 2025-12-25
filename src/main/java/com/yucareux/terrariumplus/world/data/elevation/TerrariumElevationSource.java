@@ -1,0 +1,240 @@
+package com.yucareux.terrariumplus.world.data.elevation;
+
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
+import com.yucareux.terrariumplus.Terrarium;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import javax.imageio.ImageIO;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.util.Mth;
+
+public final class TerrariumElevationSource {
+	private static final double EQUATOR_CIRCUMFERENCE = 40075017.0;
+	private static final int TILE_SIZE = 256;
+	private static final int MIN_ZOOM = 0;
+	private static final int MAX_ZOOM = 10;
+	private static final int OCEAN_MAX_ZOOM = 10;
+	private static final double MIN_LAT = -85.05112878;
+	private static final double MAX_LAT = 85.05112878;
+	private static final double MIN_LON = -180.0;
+	private static final double MAX_LON = 180.0;
+	private static final double RESOLUTION_METERS = 30.0;
+	private static final double DOWNSAMPLE_START_PIXELS = 4.0;
+	private static final int MAX_DOWNSAMPLE_STEP = 256;
+	private static final String ENDPOINT = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
+
+	private final Path cacheRoot;
+	private final LoadingCache<TileKey, ShortRaster> cache;
+
+	public TerrariumElevationSource() {
+		this.cacheRoot = FabricLoader.getInstance().getGameDir().resolve("terrarium/cache/elevation-terrarium");
+		this.cache = CacheBuilder.newBuilder()
+				.maximumSize(64)
+				.build(new CacheLoader<>() {
+					@Override
+					public ShortRaster load(TileKey key) throws Exception {
+						return TerrariumElevationSource.this.loadTile(key);
+					}
+				});
+	}
+
+	public double sampleElevationMeters(double blockX, double blockZ, double worldScale) {
+		return sampleElevationMeters(blockX, blockZ, worldScale, true);
+	}
+
+	public double sampleElevationMeters(double blockX, double blockZ, double worldScale, boolean highResOcean) {
+		if (worldScale <= 0.0) {
+			return 0.0;
+		}
+
+		int step = downsampleStep(worldScale, RESOLUTION_METERS);
+		if (step > 1) {
+			blockX = downsampleBlock(blockX, step);
+			blockZ = downsampleBlock(blockZ, step);
+		}
+
+		int zoom = Mth.clamp(selectZoom(worldScale), MIN_ZOOM, MAX_ZOOM);
+		double sample = sampleAtZoom(blockX, blockZ, worldScale, zoom);
+		if (!Double.isNaN(sample)) {
+			if (sample <= 0.0 && highResOcean) {
+				double oceanSample = sampleAtZoom(blockX, blockZ, worldScale, OCEAN_MAX_ZOOM);
+				if (!Double.isNaN(oceanSample)) {
+					return oceanSample;
+				}
+			}
+			return sample;
+		}
+		double oceanSample = sampleAtZoom(blockX, blockZ, worldScale, OCEAN_MAX_ZOOM);
+		if (!Double.isNaN(oceanSample)) {
+			return oceanSample;
+		}
+		return 0.0;
+	}
+
+	private double sampleAtZoom(double blockX, double blockZ, double worldScale, int zoom) {
+		double metersPerDegree = EQUATOR_CIRCUMFERENCE / 360.0;
+		double blocksPerDegree = metersPerDegree / worldScale;
+		double lon = blockX / blocksPerDegree;
+		double lat = -blockZ / blocksPerDegree;
+		if (lat < MIN_LAT || lat > MAX_LAT || lon < MIN_LON || lon > MAX_LON) {
+			return Double.NaN;
+		}
+
+		double latRad = Math.toRadians(lat);
+		double n = Math.pow(2.0, zoom);
+		double x = (lon + 180.0) / 360.0 * n;
+		double y = (1.0 - Math.log(Math.tan(latRad) + 1.0 / Math.cos(latRad)) / Math.PI) / 2.0 * n;
+		if (x < 0.0 || y < 0.0 || x >= n || y >= n) {
+			return Double.NaN;
+		}
+
+		int tileX = Mth.floor(x);
+		int tileY = Mth.floor(y);
+
+		ShortRaster raster = getTile(new TileKey(zoom, tileX, tileY));
+		if (raster == null) {
+			return Double.NaN;
+		}
+
+		double localX = (x - tileX) * TILE_SIZE;
+		double localY = (y - tileY) * TILE_SIZE;
+		return sampleBilinear(raster, localX, localY);
+	}
+
+	private static int downsampleStep(double worldScale, double resolutionMeters) {
+		if (worldScale <= 0.0 || resolutionMeters <= 0.0) {
+			return 1;
+		}
+		double pixelsPerBlock = worldScale / resolutionMeters;
+		if (pixelsPerBlock <= DOWNSAMPLE_START_PIXELS) {
+			return 1;
+		}
+		int step = (int) Math.floor(pixelsPerBlock / DOWNSAMPLE_START_PIXELS);
+		return Mth.clamp(step, 1, MAX_DOWNSAMPLE_STEP);
+	}
+
+	private static double downsampleBlock(double blockCoord, int step) {
+		if (step <= 1) {
+			return blockCoord;
+		}
+		int block = Mth.floor(blockCoord);
+		int snapped = Math.floorDiv(block, step) * step;
+		return snapped + step * 0.5;
+	}
+
+	private ShortRaster getTile(TileKey key) {
+		try {
+			return this.cache.get(key);
+		} catch (Exception e) {
+			Terrarium.LOGGER.warn("Failed to load elevation tile {}", key, e);
+			return null;
+		}
+	}
+
+	private ShortRaster loadTile(TileKey key) throws IOException {
+		Path cachePath = this.cacheRoot.resolve(key.zoom() + "/" + key.x() + "/" + key.y() + ".png");
+		if (Files.exists(cachePath)) {
+			try (InputStream input = Files.newInputStream(cachePath)) {
+				return readPngRaster(input);
+			}
+		}
+
+		byte[] data = downloadTile(key);
+		if (data == null) {
+			return null;
+		}
+
+		cacheTile(cachePath, data);
+		try (InputStream input = new ByteArrayInputStream(data)) {
+			return readPngRaster(input);
+		}
+	}
+
+	private byte[] downloadTile(TileKey key) throws IOException {
+		URI uri = URI.create(String.format("%s/%d/%d/%d.png", ENDPOINT, key.zoom(), key.x(), key.y()));
+		HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
+		connection.setConnectTimeout(8000);
+		connection.setReadTimeout(8000);
+		connection.setRequestProperty("User-Agent", "TerrariumPlus/1.0 (Minecraft Mod)");
+		if (connection.getResponseCode() == 404) {
+			return null;
+		}
+		try (InputStream input = connection.getInputStream()) {
+			return input.readAllBytes();
+		}
+	}
+
+	private void cacheTile(Path cachePath, byte[] data) {
+		try {
+			Files.createDirectories(cachePath.getParent());
+			Files.write(cachePath, data);
+		} catch (IOException e) {
+			Terrarium.LOGGER.warn("Failed to cache elevation tile {}", cachePath, e);
+		}
+	}
+
+	private static double sampleBilinear(ShortRaster raster, double x, double y) {
+		int maxX = raster.width() - 1;
+		int maxY = raster.height() - 1;
+		int x0 = Mth.clamp(Mth.floor(x), 0, maxX);
+		int y0 = Mth.clamp(Mth.floor(y), 0, maxY);
+		int x1 = Math.min(x0 + 1, maxX);
+		int y1 = Math.min(y0 + 1, maxY);
+
+		double dx = x - x0;
+		double dy = y - y0;
+
+		double v00 = raster.get(x0, y0);
+		double v10 = raster.get(x1, y0);
+		double v01 = raster.get(x0, y1);
+		double v11 = raster.get(x1, y1);
+
+		double lerpX0 = Mth.lerp(dx, v00, v10);
+		double lerpX1 = Mth.lerp(dx, v01, v11);
+		return Mth.lerp(dy, lerpX0, lerpX1);
+	}
+
+	private static int selectZoom(double worldScale) {
+		double zoom = zoomForScale(worldScale);
+		return Math.max((int) Math.round(zoom), MIN_ZOOM);
+	}
+
+	private static double zoomForScale(double meters) {
+		return Math.log(EQUATOR_CIRCUMFERENCE / (TILE_SIZE * meters)) / Math.log(2.0);
+	}
+
+	private static ShortRaster readPngRaster(InputStream input) throws IOException {
+		BufferedImage image = ImageIO.read(input);
+		if (image == null) {
+			throw new IOException("Invalid terrarium PNG tile");
+		}
+
+		int width = image.getWidth();
+		int height = image.getHeight();
+		ShortRaster raster = ShortRaster.create(width, height);
+
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++) {
+				int argb = image.getRGB(x, y);
+				int red = (argb >> 16) & 0xFF;
+				int green = (argb >> 8) & 0xFF;
+				int blue = argb & 0xFF;
+				double elevation = (red * 256.0 + green + blue / 256.0) - 32768.0;
+				raster.set(x, y, (short) Math.round(elevation));
+			}
+		}
+
+		return raster;
+	}
+
+	private record TileKey(int zoom, int x, int y) {
+	}
+}
