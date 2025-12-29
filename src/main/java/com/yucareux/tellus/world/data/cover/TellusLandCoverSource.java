@@ -277,7 +277,6 @@ public final class TellusLandCoverSource {
 		if (Files.exists(cachePath)) {
 			return GeoTiffTile.open(cachePath);
 		}
-
 		byte[] data = downloadTile(key);
 		if (data == null) {
 			return GeoTiffTile.MISSING;

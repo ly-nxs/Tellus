@@ -23,7 +23,7 @@ public final class WaterSurfaceResolver {
 
 	private static final double SHORELINE_SHALLOW_METERS = 3.0 * DEFAULT_SCALE;
 	private static final double SHORELINE_MEDIUM_METERS = 8.0 * DEFAULT_SCALE;
-	private static final double SHORE_BLEND_METERS = 6.0 * DEFAULT_SCALE;
+	private static final double SHORE_BLEND_METERS = 0.0;
 	private static final double DEPTH_SHALLOW_METERS = 1.0 * DEFAULT_SCALE;
 	private static final double DEPTH_MEDIUM_METERS = 2.0 * DEFAULT_SCALE;
 	private static final double MAX_WATER_DEPTH_METERS = 15.0 * DEFAULT_SCALE;
@@ -34,6 +34,7 @@ public final class WaterSurfaceResolver {
 	private static final double OCEAN_NO_DATA_THRESHOLD_METERS = 5.0;
 	private static final int LAKE_SMOOTH_PASSES = 1;
 	private static final int MAX_REGION_MARGIN_BLOCKS = 512;
+	private static final int WATER_CHUNK_PADDING = 0;
 
 	private static final int DIST_COST_CARDINAL = 10;
 	private static final int DIST_COST_DIAGONAL = 14;
@@ -113,6 +114,9 @@ public final class WaterSurfaceResolver {
 	}
 
 	public WaterChunkData resolveChunkWaterData(int chunkX, int chunkZ) {
+		if (!hasWaterNearChunk(chunkX, chunkZ, WATER_CHUNK_PADDING)) {
+			return buildDryChunkData(chunkX, chunkZ);
+		}
 		WaterRegionData region = resolveRegionData(regionCoord(chunkX << 4), regionCoord(chunkZ << 4));
 		return new WaterChunkData(chunkX, chunkZ, region);
 	}
@@ -146,6 +150,11 @@ public final class WaterSurfaceResolver {
 	}
 
 	public WaterColumnData resolveColumnData(int blockX, int blockZ) {
+		int coverClass = this.landCoverSource.sampleCoverClass(blockX, blockZ, this.settings.worldScale());
+		if (!isWaterClass(coverClass)) {
+			int surface = sampleSurfaceHeight(blockX, blockZ);
+			return new WaterColumnData(false, false, surface, surface);
+		}
 		WaterRegionData region = resolveRegionData(regionCoord(blockX), regionCoord(blockZ));
 		return region.columnData(blockX, blockZ);
 	}
@@ -181,6 +190,43 @@ public final class WaterSurfaceResolver {
 			Tellus.LOGGER.warn("Failed to build water region {}:{}", regionX, regionZ, e);
 			return buildRegionData(regionX, regionZ);
 		}
+	}
+
+	private boolean hasWaterNearChunk(int chunkX, int chunkZ, int padding) {
+		int minX = (chunkX << 4) - padding;
+		int minZ = (chunkZ << 4) - padding;
+		int maxX = (chunkX << 4) + 15 + padding;
+		int maxZ = (chunkZ << 4) + 15 + padding;
+		for (int z = minZ; z <= maxZ; z++) {
+			for (int x = minX; x <= maxX; x++) {
+				int coverClass = this.landCoverSource.sampleCoverClass(x, z, this.settings.worldScale());
+				if (isWaterClass(coverClass)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private WaterChunkData buildDryChunkData(int chunkX, int chunkZ) {
+		int minX = chunkX << 4;
+		int minZ = chunkZ << 4;
+		int[] terrainSurface = new int[16 * 16];
+		int[] waterSurface = new int[16 * 16];
+		byte[] waterFlags = new byte[16 * 16];
+		for (int dz = 0; dz < 16; dz++) {
+			int worldZ = minZ + dz;
+			int row = dz * 16;
+			for (int dx = 0; dx < 16; dx++) {
+				int worldX = minX + dx;
+				int index = row + dx;
+				int surface = sampleSurfaceHeight(worldX, worldZ);
+				terrainSurface[index] = surface;
+				waterSurface[index] = surface;
+				waterFlags[index] = WATER_NONE;
+			}
+		}
+		return new WaterChunkData(terrainSurface, waterSurface, waterFlags);
 	}
 
 	private WaterRegionData buildRegionData(int regionX, int regionZ) {
@@ -1455,6 +1501,12 @@ public final class WaterSurfaceResolver {
 		private final int[] terrainSurface;
 		private final int[] waterSurface;
 		private final byte[] waterFlags;
+
+		private WaterChunkData(int[] terrainSurface, int[] waterSurface, byte[] waterFlags) {
+			this.terrainSurface = terrainSurface;
+			this.waterSurface = waterSurface;
+			this.waterFlags = waterFlags;
+		}
 
 		private WaterChunkData(int chunkX, int chunkZ, WaterRegionData region) {
 			int minX = chunkX << 4;

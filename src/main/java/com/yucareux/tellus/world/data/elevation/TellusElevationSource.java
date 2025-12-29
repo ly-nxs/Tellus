@@ -220,7 +220,6 @@ public final class TellusElevationSource {
 				return readPngRaster(input);
 			}
 		}
-
 		byte[] data = downloadTile(key);
 		if (data == null) {
 			return null;
