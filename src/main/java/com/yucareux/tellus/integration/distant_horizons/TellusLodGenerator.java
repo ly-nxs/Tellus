@@ -138,7 +138,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 				}
 
 				final CanopyColumn canopyColumn = !underwater
-						? resolveCanopyColumn(biomeHolder, worldX, worldZ, detailLevel)
+						? resolveCanopyColumn(biomeHolder, worldX, worldZ, cellSize)
 						: null;
 				if (canopyColumn != null && lastLayerTop < absoluteTop) {
 					if (canopyColumn.trunkHeight > 0 && canopyColumn.trunkBlock != null) {
@@ -259,7 +259,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			final Holder<Biome> biome,
 			final int worldX,
 			final int worldZ,
-			final byte detailLevel
+			final int cellSize
 	) {
 		final int baseChance = canopyCenterChancePercent(biome);
 		final int chance = boostCanopyChancePercent(baseChance);
@@ -267,7 +267,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			return null;
 		}
 
-		final int gridSize = canopyGridSize(biome, detailLevel);
+		final int gridSize = canopyGridSize(biome, cellSize);
 		final int cellX = Math.floorDiv(worldX, gridSize);
 		final int cellZ = Math.floorDiv(worldZ, gridSize);
 
@@ -313,8 +313,11 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		if (falloff >= 4) {
 			crownHeight++;
 		}
-		crownHeight += (bestHash >>> 19) & 1;
 		final int maxHeight = canopyMaxHeight(biome);
+		crownHeight += (bestHash >>> 19) & 1;
+		if (bestCenter) {
+			crownHeight++;
+		}
 		crownHeight = Math.min(crownHeight, maxHeight);
 		if (crownHeight <= 0) {
 			return null;
@@ -366,9 +369,13 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return Math.min(CANOPY_DENSITY_MAX, boosted);
 	}
 
-	private static int canopyGridSize(final Holder<Biome> biome, final byte detailLevel) {
+	private static int canopyGridSize(final Holder<Biome> biome, final int cellSize) {
+		final int detailLevel = Math.max(0, Integer.numberOfTrailingZeros(cellSize));
 		final int scale = Math.min(CANOPY_GRID_SCALE_MAX, Math.max(0, detailLevel - 2));
-		return CANOPY_GRID_SIZE + (scale << 1);
+		final int gridFromDetail = CANOPY_GRID_SIZE + (scale << 1);
+		final int gridFromCell = CANOPY_GRID_SIZE + Math.max(-2, (cellSize - 8) / 4);
+		final int maxGrid = CANOPY_GRID_SIZE + (CANOPY_GRID_SCALE_MAX << 1);
+		return Mth.clamp(Math.min(gridFromDetail, gridFromCell), 6, maxGrid);
 	}
 
 	private static int canopyRadius(final Holder<Biome> biome, final int centerHash, final int gridSize) {
@@ -392,20 +399,26 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 	}
 
 	private static int canopyBaseHeight(final Holder<Biome> biome) {
+		if (isJungleBiome(biome)) {
+			return 3;
+		}
 		if (isTallCanopyBiome(biome)) {
-			return 2;
+			return 3;
 		}
 		if (biome.is(BiomeTags.IS_TAIGA)) {
-			return 2;
-		}
-		return 1;
-	}
-
-	private static int canopyMaxHeight(final Holder<Biome> biome) {
-		if (isTallCanopyBiome(biome) || biome.is(BiomeTags.IS_TAIGA)) {
 			return 3;
 		}
 		return 2;
+	}
+
+	private static int canopyMaxHeight(final Holder<Biome> biome) {
+		if (isJungleBiome(biome)) {
+			return 3;
+		}
+		if (isTallCanopyBiome(biome) || biome.is(BiomeTags.IS_TAIGA)) {
+			return 4;
+		}
+		return 3;
 	}
 
 	private static boolean hasCanopyCenter(final int centerHash, final int chancePercent) {
@@ -418,6 +431,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		int jitter = (centerHash >>> 21) & 0x3;
 		if (jitter == 3) {
 			jitter = 2;
+		}
+		if (isJungleBiome(biome)) {
+			return 13 + jitter;
 		}
 		int height = 3 + jitter;
 		if (isTallCanopyBiome(biome)) {
@@ -437,10 +453,9 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			return 0;
 		}
 
-		int lift = isTallCanopyBiome(biome) ? 2 : 1;
-		final int liftBoost = Math.max(0, centerTrunkHeight - 2 - bestDist);
-		lift += liftBoost;
-		if (((centerHash >>> 20) & 1) == 0) {
+		final int baseLift = Math.max(1, centerTrunkHeight - Math.max(0, bestDist - 1));
+		int lift = isTallCanopyBiome(biome) ? Math.max(2, baseLift) : Math.max(1, baseLift);
+		if (bestDist > 1 && ((centerHash >>> 20) & 1) == 0) {
 			lift = Math.max(1, lift - 1);
 		}
 		return lift;
@@ -450,6 +465,10 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 		return biome.is(Biomes.MANGROVE_SWAMP)
 				|| biome.is(Biomes.DARK_FOREST)
 				|| biome.is(BiomeTags.IS_JUNGLE);
+	}
+
+	private static boolean isJungleBiome(final Holder<Biome> biome) {
+		return biome.is(BiomeTags.IS_JUNGLE);
 	}
 
 	private static WaterVegetationColumn resolveWaterVegetationColumn(

@@ -32,11 +32,8 @@ public final class TellusKoppenSource {
 	private static final int SMOOTH_RADIUS_PIXELS = 2;
 	private static final double WARP_AMPLITUDE_METERS = 800.0;
 	private static final double WARP_WAVELENGTH_METERS = 12000.0;
-	private static final double DITHER_PRIMARY_THRESHOLD = 0.85;
-	private static final double DITHER_CELL_METERS = 400.0;
 	private static final long WARP_SEED_X = 0x243f6a8885a308d3L;
 	private static final long WARP_SEED_Z = 0x13198a2e03707344L;
-	private static final long DITHER_SEED = 0xa4093822299f31d0L;
 
 	private static final String[] KOPPEN_CODES = new String[31];
 
@@ -83,16 +80,18 @@ public final class TellusKoppenSource {
 	}
 
 	public String sampleDitheredCode(double blockX, double blockZ, double worldScale) {
-		KoppenBlend blend = sampleBlend(blockX, blockZ, worldScale);
-		if (blend == null) {
+		return sampleRawCode(blockX, blockZ, worldScale);
+	}
+
+	public String sampleRawCode(double blockX, double blockZ, double worldScale) {
+		Pixel center = toPixel(blockX, blockZ, worldScale);
+		if (center == null) {
 			return null;
 		}
-		if (blend.secondary() == null || blend.primaryWeight() >= DITHER_PRIMARY_THRESHOLD) {
-			return blend.primary();
+		if (this.raster == GeoTiffRaster.MISSING) {
+			return null;
 		}
-		return pickPrimary(blockX, blockZ, worldScale, blend.primaryWeight())
-				? blend.primary()
-				: blend.secondary();
+		return this.raster.sample(center);
 	}
 
 	public String sampleSmoothedCode(double blockX, double blockZ, double worldScale) {
@@ -116,17 +115,6 @@ public final class TellusKoppenSource {
 		}
 		int radius = this.raster.radiusForMeters(SEARCH_RADIUS_METERS);
 		return this.raster.findNearest(center, radius);
-	}
-
-	private KoppenBlend sampleBlend(double blockX, double blockZ, double worldScale) {
-		Pixel center = toPixel(blockX, blockZ, worldScale);
-		if (center == null) {
-			return null;
-		}
-		if (this.raster == GeoTiffRaster.MISSING) {
-			return null;
-		}
-		return this.raster.sampleBlend(center, SMOOTH_RADIUS_PIXELS);
 	}
 
 	private Pixel toPixel(double blockX, double blockZ, double worldScale) {
@@ -170,27 +158,6 @@ public final class TellusKoppenSource {
 		int block = Mth.floor(blockCoord);
 		int snapped = Math.floorDiv(block, step) * step;
 		return snapped + step * 0.5;
-	}
-
-	private static boolean pickPrimary(double blockX, double blockZ, double worldScale, double primaryWeight) {
-		if (primaryWeight <= 0.0) {
-			return false;
-		}
-		if (primaryWeight >= 1.0) {
-			return true;
-		}
-		double noise = ditherNoise(blockX, blockZ, worldScale);
-		return noise < primaryWeight;
-	}
-
-	private static double ditherNoise(double blockX, double blockZ, double worldScale) {
-		if (worldScale <= 0.0) {
-			return 0.0;
-		}
-		int cellSize = Math.max(1, (int) Math.round(DITHER_CELL_METERS / worldScale));
-		int cellX = Mth.floor(blockX / cellSize);
-		int cellZ = Mth.floor(blockZ / cellSize);
-		return hashToUnit(cellX, cellZ, DITHER_SEED);
 	}
 
 	private static WarpedCoords warpBlock(double blockX, double blockZ, double worldScale) {
@@ -281,9 +248,6 @@ public final class TellusKoppenSource {
 	}
 
 	private record WarpedCoords(double x, double z) {
-	}
-
-	private record KoppenBlend(String primary, String secondary, double primaryWeight) {
 	}
 
 	private static final class GeoTiffRaster {
@@ -436,74 +400,6 @@ public final class TellusKoppenSource {
 				return null;
 			}
 			return KOPPEN_CODES[bestIndex];
-		}
-
-		KoppenBlend sampleBlend(Pixel center, int radius) {
-			if (center == null || radius <= 0) {
-				String code = sample(center);
-				return code == null ? null : new KoppenBlend(code, null, 1.0);
-			}
-			int centerValue = sampleValue(center.x, center.y);
-			if (centerValue > 0) {
-				int north = sampleValue(center.x, center.y - radius);
-				int south = sampleValue(center.x, center.y + radius);
-				int west = sampleValue(center.x - radius, center.y);
-				int east = sampleValue(center.x + radius, center.y);
-				if (north == centerValue && south == centerValue && west == centerValue && east == centerValue) {
-					return new KoppenBlend(KOPPEN_CODES[centerValue], null, 1.0);
-				}
-			}
-
-			int[] counts = new int[KOPPEN_CODES.length];
-			int total = 0;
-			for (int dy = -radius; dy <= radius; dy++) {
-				for (int dx = -radius; dx <= radius; dx++) {
-					if (dx * dx + dy * dy > radius * radius) {
-						continue;
-					}
-					int value = sampleValue(center.x + dx, center.y + dy);
-					if (value > 0 && value < counts.length) {
-						counts[value]++;
-						total++;
-					}
-				}
-			}
-			if (total == 0) {
-				return null;
-			}
-
-			int bestIndex = -1;
-			int secondIndex = -1;
-			int bestCount = -1;
-			int secondCount = -1;
-			for (int i = 1; i < counts.length; i++) {
-				int count = counts[i];
-				if (count > bestCount) {
-					secondIndex = bestIndex;
-					secondCount = bestCount;
-					bestIndex = i;
-					bestCount = count;
-					continue;
-				}
-				if (count > secondCount && i != bestIndex) {
-					secondIndex = i;
-					secondCount = count;
-					continue;
-				}
-				if (count == bestCount && count > 0 && i == centerValue) {
-					secondIndex = bestIndex;
-					secondCount = bestCount;
-					bestIndex = i;
-				}
-			}
-
-			if (bestIndex <= 0) {
-				return null;
-			}
-			String primary = KOPPEN_CODES[bestIndex];
-			String secondary = secondCount > 0 ? KOPPEN_CODES[secondIndex] : null;
-			double primaryWeight = bestCount / (double) total;
-			return new KoppenBlend(primary, secondary, primaryWeight);
 		}
 
 		String findNearest(Pixel center, int radius) {
