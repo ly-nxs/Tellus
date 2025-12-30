@@ -16,7 +16,7 @@ public final class WaterSurfaceResolver {
 	private static final byte WATER_INLAND = 1;
 	private static final byte WATER_OCEAN = 2;
 	private static final int REGION_SIZE = 64;
-	private static final int MAX_REGION_CACHE = 256;
+	private static final int MAX_REGION_CACHE = 512;
 	private static final int MAX_SLOPE_STEP = 6;
 	private static final double DEFAULT_SCALE = EarthGeneratorSettings.DEFAULT.worldScale();
 	private static final int CINEMATIC_MAX_DISTANCE_BLOCKS = 256;

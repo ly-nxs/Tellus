@@ -83,6 +83,7 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 			final ExecutorService worldGeneratorThreadPool,
 			final Consumer<IDhApiFullDataSource> resultConsumer
 	) {
+		prefetchLodResources(chunkPosMinX, chunkPosMinZ, detailLevel, pooledFullDataSource.getWidthInDataColumns());
 		return CompletableFuture.runAsync(() -> {
 			buildLod(pooledFullDataSource, chunkPosMinX, chunkPosMinZ, detailLevel);
 			resultConsumer.accept(pooledFullDataSource);
@@ -119,12 +120,10 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 				final boolean underwater = waterColumn.hasWater() && waterSurface > surfaceY;
 				final Holder<Biome> biomeHolder = biomeSource.getBiomeAtBlock(worldX, worldZ);
 				final IDhApiBiomeWrapper biome = wrappers.getBiome(biomeHolder);
-				final IDhApiBlockStateWrapper fillerBlock = wrappers.getBlockState(
-						generator.resolveLodFillerBlock(worldX, worldZ)
-				);
-				final IDhApiBlockStateWrapper topBlock = wrappers.getBlockState(
-						generator.resolveLodSurfaceBlock(worldX, worldZ, underwater)
-				);
+				final EarthChunkGenerator.LodSurface lodSurface =
+						generator.resolveLodSurface(biomeHolder, worldX, worldZ, surfaceY, underwater);
+				final IDhApiBlockStateWrapper fillerBlock = wrappers.getBlockState(lodSurface.filler());
+				final IDhApiBlockStateWrapper topBlock = wrappers.getBlockState(lodSurface.top());
 
 				int lastLayerTop = 0;
 				final int surfaceTop = toLayerTop(surfaceY, minY, absoluteTop);
@@ -223,6 +222,37 @@ public final class TellusLodGenerator implements IDhApiWorldGenerator {
 
 	private static int toLayerTop(final int inclusiveTopY, final int minY, final int absoluteTop) {
 		return Mth.clamp(inclusiveTopY - minY + 1, 0, absoluteTop);
+	}
+
+	private void prefetchLodResources(
+			final int chunkPosMinX,
+			final int chunkPosMinZ,
+			final byte detailLevel,
+			final int lodSizePoints
+	) {
+		if (lodSizePoints <= 0) {
+			return;
+		}
+		final int cellSize = 1 << detailLevel;
+		final int cellOffset = cellSize >> 1;
+		final int baseX = SectionPos.sectionToBlockCoord(chunkPosMinX);
+		final int baseZ = SectionPos.sectionToBlockCoord(chunkPosMinZ);
+		final int minBlockX = baseX + cellOffset;
+		final int minBlockZ = baseZ + cellOffset;
+		final int maxBlockX = baseX + (lodSizePoints - 1) * cellSize + cellOffset;
+		final int maxBlockZ = baseZ + (lodSizePoints - 1) * cellSize + cellOffset;
+
+		prefetchAtBlock(minBlockX, minBlockZ);
+		prefetchAtBlock(minBlockX, maxBlockZ);
+		prefetchAtBlock(maxBlockX, minBlockZ);
+		prefetchAtBlock(maxBlockX, maxBlockZ);
+		prefetchAtBlock(Math.floorDiv(minBlockX + maxBlockX, 2), Math.floorDiv(minBlockZ + maxBlockZ, 2));
+	}
+
+	private void prefetchAtBlock(final int blockX, final int blockZ) {
+		final int chunkX = SectionPos.blockToSectionCoord(blockX);
+		final int chunkZ = SectionPos.blockToSectionCoord(blockZ);
+		generator.prefetchForChunk(chunkX, chunkZ);
 	}
 
 	private static CanopyColumn resolveCanopyColumn(

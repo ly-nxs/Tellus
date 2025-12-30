@@ -30,7 +30,7 @@ public final class TellusElevationSource {
 	private static final double DOWNSAMPLE_START_PIXELS = 4.0;
 	private static final int MAX_DOWNSAMPLE_STEP = 256;
 	private static final String ENDPOINT = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
-	private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", 256);
+	private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", 512);
 
 	private final Path cacheRoot;
 	private final LoadingCache<TileKey, ShortRaster> cache;

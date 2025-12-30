@@ -34,7 +34,7 @@ public final class TellusLandCoverSource {
 	private static final int SNOW_ICE_CLASS = 70;
 	private static final int WATER_CLASS = 80;
 	private static final int NO_DATA_CLASS = 0;
-	private static final int MAX_CACHE_TILES = intProperty("tellus.landcover.cacheTiles", 24);
+	private static final int MAX_CACHE_TILES = intProperty("tellus.landcover.cacheTiles", 64);
 	private static final double RESOLUTION_METERS = 10.0;
 	private static final double DOWNSAMPLE_START_PIXELS = 4.0;
 	private static final int MAX_DOWNSAMPLE_STEP = 256;
