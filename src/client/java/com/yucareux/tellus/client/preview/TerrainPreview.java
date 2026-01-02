@@ -4,7 +4,9 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.mixin.client.GuiGraphicsAccessor;
+import com.yucareux.tellus.world.data.cover.TellusLandCoverSource;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
+import com.yucareux.tellus.world.data.koppen.TellusKoppenSource;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -29,6 +31,8 @@ public final class TerrainPreview implements AutoCloseable {
 	private static final int GRID_SIZE = 385;
 	private static final int GRID_RADIUS_BLOCKS = 256;
 	private static final int GRANULARITY = 1;
+	private static final int COVER_SAMPLE_STRIDE = 2;
+	private static final int CLIMATE_SAMPLE_STRIDE = 4;
 	private static final float VERTICAL_SCALE = 0.7f;
 	private static final float CAMERA_DISTANCE = 2.35f;
 	private static final float FOV = 50.0f;
@@ -46,11 +50,49 @@ public final class TerrainPreview implements AutoCloseable {
 	private static final int HIGH_LAND_COLOR = 0x8C7A64;
 	private static final int ROCK_COLOR = 0xA0A0A0;
 	private static final int PEAK_COLOR = 0xF5F5F5;
+	private static final int TREE_COLOR = 0x3F9A53;
+	private static final int SHRUB_COLOR = 0x8FA354;
+	private static final int GRASS_COLOR = 0x7DBF5B;
+	private static final int CROPLAND_COLOR = 0xA7B96A;
+	private static final int BUILT_COLOR = 0x8A8A8A;
+	private static final int BARE_COLOR = 0xC7B27A;
+	private static final int WETLAND_COLOR = 0x4B8C5A;
+	private static final int MANGROVE_COLOR = 0x2F6B3E;
+	private static final int MOSS_COLOR = 0x7FAE6B;
+	private static final int TINT_TROPICAL = 0x2E9D57;
+	private static final int TINT_ARID = 0xD0B072;
+	private static final int TINT_TEMPERATE = 0x7FAF63;
+	private static final int TINT_COLD = 0x6D8292;
+	private static final int TINT_POLAR = 0xC9D6E2;
+	private static final double ROCK_SLOPE_THRESHOLD = 1.2;
+	private static final double ROCK_SLOPE_RANGE = 1.6;
+	private static final double INLAND_WATER_DEPTH_BLOCKS = 6.0;
+
+	private static final int ESA_NO_DATA = 0;
+	private static final int ESA_TREE_COVER = 10;
+	private static final int ESA_SHRUBLAND = 20;
+	private static final int ESA_GRASSLAND = 30;
+	private static final int ESA_CROPLAND = 40;
+	private static final int ESA_BUILT_UP = 50;
+	private static final int ESA_BARE = 60;
+	private static final int ESA_SNOW_ICE = 70;
+	private static final int ESA_WATER = 80;
+	private static final int ESA_WETLAND = 90;
+	private static final int ESA_MANGROVES = 95;
+	private static final int ESA_MOSS = 100;
+	private static final byte CLIMATE_UNKNOWN = 0;
+	private static final byte CLIMATE_TROPICAL = 1;
+	private static final byte CLIMATE_ARID = 2;
+	private static final byte CLIMATE_TEMPERATE = 3;
+	private static final byte CLIMATE_COLD = 4;
+	private static final byte CLIMATE_POLAR = 5;
 	private static final Vector3f LIGHT_DIR = new Vector3f(-0.4f, 0.8f, -0.4f).normalize();
 	private static final float AMBIENT_SHADE = 0.45f;
 	private static final float SHADE_STEPS = 8.0f;
 
 	private final TellusElevationSource elevationSource = new TellusElevationSource();
+	private final TellusLandCoverSource landCoverSource = new TellusLandCoverSource();
+	private final TellusKoppenSource koppenSource = new TellusKoppenSource();
 	private final ExecutorService executor;
 	private final AtomicInteger requestId = new AtomicInteger();
 
@@ -129,7 +171,8 @@ public final class TerrainPreview implements AutoCloseable {
 		double[] elevations = new double[size * size];
 
 		double metersPerDegree = EQUATOR_CIRCUMFERENCE / 360.0;
-		double blocksPerDegree = metersPerDegree / settings.worldScale();
+		double worldScale = settings.worldScale();
+		double blocksPerDegree = metersPerDegree / worldScale;
 		double centerX = settings.spawnLongitude() * blocksPerDegree;
 		double centerZ = -settings.spawnLatitude() * blocksPerDegree;
 		double radius = GRID_RADIUS_BLOCKS;
@@ -143,8 +186,8 @@ public final class TerrainPreview implements AutoCloseable {
 				double elevation = this.elevationSource.sampleElevationMeters(
 						blockX,
 						blockZ,
-						settings.worldScale(),
-						false
+						worldScale,
+						true
 				);
 				elevations[idx] = elevation;
 				blockHeights[idx] = applyHeightScale(elevation, settings);
@@ -165,11 +208,57 @@ public final class TerrainPreview implements AutoCloseable {
 			heights[i] -= center;
 		}
 
+		int coverStride = COVER_SAMPLE_STRIDE;
+		int coverSize = (size + coverStride - 1) / coverStride;
+		int[] coverClasses = new int[coverSize * coverSize];
+		for (int z = 0; z < coverSize; z++) {
+			int sampleZ = Math.min(size - 1, z * coverStride);
+			double blockZ = centerZ - radius + sampleZ * step;
+			for (int x = 0; x < coverSize; x++) {
+				int sampleX = Math.min(size - 1, x * coverStride);
+				double blockX = centerX - radius + sampleX * step;
+				int idx = x + z * coverSize;
+				coverClasses[idx] = this.landCoverSource.sampleCoverClass(blockX, blockZ, worldScale);
+			}
+		}
+
+		int climateStride = CLIMATE_SAMPLE_STRIDE;
+		int climateSize = (size + climateStride - 1) / climateStride;
+		byte[] climateGroups = new byte[climateSize * climateSize];
+		for (int z = 0; z < climateSize; z++) {
+			int sampleZ = Math.min(size - 1, z * climateStride);
+			double blockZ = centerZ - radius + sampleZ * step;
+			for (int x = 0; x < climateSize; x++) {
+				int sampleX = Math.min(size - 1, x * climateStride);
+				double blockX = centerX - radius + sampleX * step;
+				int idx = x + z * climateSize;
+				String koppen = this.koppenSource.sampleDitheredCode(blockX, blockZ, worldScale);
+				climateGroups[idx] = climateGroup(koppen);
+			}
+		}
+
+		int seaLevel = settings.resolveSeaLevel();
 		int[] colors = new int[size * size];
 		for (int z = 0; z < size; z++) {
+			int coverZ = Math.min(coverSize - 1, z / coverStride);
+			int climateZ = Math.min(climateSize - 1, z / climateStride);
 			for (int x = 0; x < size; x++) {
 				int idx = x + z * size;
-				colors[idx] = colorForElevation(elevations[idx]);
+				int coverX = Math.min(coverSize - 1, x / coverStride);
+				int climateX = Math.min(climateSize - 1, x / climateStride);
+				int coverIdx = coverX + coverZ * coverSize;
+				int climateIdx = climateX + climateZ * climateSize;
+				int coverClass = coverClasses[coverIdx];
+				byte climateGroup = climateGroups[climateIdx];
+				double slope = computeSlope(blockHeights, size, idx, step);
+				colors[idx] = colorForPreview(
+						coverClass,
+						climateGroup,
+						elevations[idx],
+						blockHeights[idx],
+						slope,
+						seaLevel
+				);
 			}
 		}
 
@@ -186,6 +275,132 @@ public final class TerrainPreview implements AutoCloseable {
 		double scaled = elevation * scale / settings.worldScale();
 		int base = elevation >= 0.0 ? Mth.ceil(scaled) : Mth.floor(scaled);
 		return base + settings.heightOffset();
+	}
+
+	private static double computeSlope(double[] heights, int size, int idx, double step) {
+		int x = idx % size;
+		int z = idx / size;
+		int idxRight = x + 1 < size ? idx + 1 : idx;
+		int idxDown = z + 1 < size ? idx + size : idx;
+		double dx = Math.abs(heights[idxRight] - heights[idx]);
+		double dz = Math.abs(heights[idxDown] - heights[idx]);
+		double diff = Math.max(dx, dz);
+		return step <= 0.0 ? diff : diff / step;
+	}
+
+	private static byte climateGroup(String koppen) {
+		if (koppen == null || koppen.isEmpty()) {
+			return CLIMATE_UNKNOWN;
+		}
+		char group = Character.toUpperCase(koppen.charAt(0));
+		return switch (group) {
+			case 'A' -> CLIMATE_TROPICAL;
+			case 'B' -> CLIMATE_ARID;
+			case 'C' -> CLIMATE_TEMPERATE;
+			case 'D' -> CLIMATE_COLD;
+			case 'E' -> CLIMATE_POLAR;
+			default -> CLIMATE_UNKNOWN;
+		};
+	}
+
+	private static int colorForPreview(
+			int coverClass,
+			byte climateGroup,
+			double elevationMeters,
+			double terrainHeight,
+			double slope,
+			int seaLevel
+	) {
+		if (coverClass == ESA_NO_DATA) {
+			double depth = Math.max(0.0, seaLevel - terrainHeight);
+			return waterColorForDepth(depth);
+		}
+		if (coverClass == ESA_WATER) {
+			double depth = Math.max(INLAND_WATER_DEPTH_BLOCKS, seaLevel - terrainHeight);
+			return waterColorForDepth(depth);
+		}
+		if (coverClass == ESA_SNOW_ICE) {
+			return PEAK_COLOR;
+		}
+		int base = baseColorForCover(coverClass, elevationMeters);
+		int tinted = applyClimateTint(base, climateGroup, coverClass);
+		return applyRockTint(tinted, slope);
+	}
+
+	private static int baseColorForCover(int coverClass, double elevationMeters) {
+		return switch (coverClass) {
+			case ESA_TREE_COVER -> TREE_COLOR;
+			case ESA_SHRUBLAND -> SHRUB_COLOR;
+			case ESA_GRASSLAND -> GRASS_COLOR;
+			case ESA_CROPLAND -> CROPLAND_COLOR;
+			case ESA_BUILT_UP -> BUILT_COLOR;
+			case ESA_BARE -> BARE_COLOR;
+			case ESA_WETLAND -> WETLAND_COLOR;
+			case ESA_MANGROVES -> MANGROVE_COLOR;
+			case ESA_MOSS -> MOSS_COLOR;
+			default -> colorForElevation(elevationMeters);
+		};
+	}
+
+	private static boolean isWaterCover(int coverClass) {
+		return coverClass == ESA_WATER || coverClass == ESA_NO_DATA;
+	}
+
+	private static int waterColorForDepth(double depthBlocks) {
+		if (depthBlocks <= 2.0) {
+			return lerpColor(SHORE_COLOR, SHALLOW_SEA_COLOR, depthBlocks / 2.0);
+		}
+		if (depthBlocks <= 12.0) {
+			return lerpColor(SHALLOW_SEA_COLOR, MID_SEA_COLOR, (depthBlocks - 2.0) / 10.0);
+		}
+		if (depthBlocks <= 80.0) {
+			return lerpColor(MID_SEA_COLOR, DEEP_SEA_COLOR, (depthBlocks - 12.0) / 68.0);
+		}
+		return DEEP_SEA_COLOR;
+	}
+
+	private static int applyClimateTint(int base, byte climateGroup, int coverClass) {
+		float amount = climateBlendStrength(coverClass);
+		if (amount <= 0.0f || climateGroup == CLIMATE_UNKNOWN) {
+			return base;
+		}
+		int tint = tintForClimate(climateGroup);
+		if (tint == 0) {
+			return base;
+		}
+		if (climateGroup == CLIMATE_POLAR) {
+			amount = Math.min(0.65f, amount + 0.2f);
+		}
+		return blendColor(base, tint, amount);
+	}
+
+	private static float climateBlendStrength(int coverClass) {
+		return switch (coverClass) {
+			case ESA_TREE_COVER, ESA_GRASSLAND, ESA_CROPLAND, ESA_WETLAND, ESA_MOSS -> 0.35f;
+			case ESA_SHRUBLAND -> 0.25f;
+			case ESA_BARE -> 0.15f;
+			case ESA_MANGROVES -> 0.2f;
+			default -> 0.0f;
+		};
+	}
+
+	private static int tintForClimate(byte climateGroup) {
+		return switch (climateGroup) {
+			case CLIMATE_TROPICAL -> TINT_TROPICAL;
+			case CLIMATE_ARID -> TINT_ARID;
+			case CLIMATE_TEMPERATE -> TINT_TEMPERATE;
+			case CLIMATE_COLD -> TINT_COLD;
+			case CLIMATE_POLAR -> TINT_POLAR;
+			default -> 0;
+		};
+	}
+
+	private static int applyRockTint(int base, double slope) {
+		if (slope <= ROCK_SLOPE_THRESHOLD) {
+			return base;
+		}
+		double amount = (slope - ROCK_SLOPE_THRESHOLD) / ROCK_SLOPE_RANGE;
+		return blendColor(base, ROCK_COLOR, (float) Mth.clamp(amount, 0.0, 1.0));
 	}
 
 	private static int colorForElevation(double elevation) {
@@ -230,6 +445,23 @@ public final class TerrainPreview implements AutoCloseable {
 		int g = (int) Math.round(ag + (bg - ag) * clamped);
 		int bch = (int) Math.round(ab + (bb - ab) * clamped);
 		return (r << 16) | (g << 8) | bch;
+	}
+
+	private static int blendColor(int base, int tint, float amount) {
+		if (amount <= 0.0f) {
+			return base;
+		}
+		float clamped = Mth.clamp(amount, 0.0f, 1.0f);
+		int br = (base >> 16) & 0xFF;
+		int bg = (base >> 8) & 0xFF;
+		int bb = base & 0xFF;
+		int tr = (tint >> 16) & 0xFF;
+		int tg = (tint >> 8) & 0xFF;
+		int tb = tint & 0xFF;
+		int r = Math.round(br + (tr - br) * clamped);
+		int g = Math.round(bg + (tg - bg) * clamped);
+		int b = Math.round(bb + (tb - bb) * clamped);
+		return (r << 16) | (g << 8) | b;
 	}
 
 	@Override
