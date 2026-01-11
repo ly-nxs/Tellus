@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "tellus",
+  "version": "${version}",
+  "name": "Tellus",
+  
+  "entrypoints": {
+    "main": [
+      "com.yucareux.tellus.fabric.TellusFabric"
+    ],
+    "client": [
+      "com.yucareux.tellus.fabric.client.TellusFabricClient"
+    ]
+  },
+  
+  "mixins": [
+    "tellus.mixins.json"
+  ],
+  
+  "depends": {
+    "minecraft": "~1.21",
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "architectury": ">=13.0.0"
+  }
+}

@@ -1,0 +1,140 @@
+package com.yucareux.tellus.client.client.screen;
+
+import com.yucareux.tellus.client.client.widget.map.PlaceSearchWidget;
+import com.yucareux.tellus.client.client.widget.map.SlippyMapPoint;
+import com.yucareux.tellus.client.client.widget.map.SlippyMapWidget;
+import com.yucareux.tellus.client.client.widget.map.component.MarkerMapComponent;
+import com.yucareux.tellus.network.GeoTpTeleportPayload;
+import com.yucareux.tellus.world.data.source.Geocoder;
+import com.yucareux.tellus.world.data.source.NominatimGeocoder;
+import dev.architectury.networking.NetworkManager;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+
+public class EarthTeleportScreen extends Screen {
+	private static final int DEFAULT_ZOOM = 6;
+
+	private final @Nullable Screen parent;
+	private final double initialLatitude;
+	private final double initialLongitude;
+
+	private SlippyMapWidget mapWidget;
+	private MarkerMapComponent markerComponent;
+	private PlaceSearchWidget searchWidget;
+
+	public EarthTeleportScreen(@Nullable Screen parent, double latitude, double longitude) {
+		super(Component.translatable("gui.earth.teleport_map"));
+		this.parent = parent;
+		this.initialLatitude = latitude;
+		this.initialLongitude = longitude;
+	}
+
+	@Override
+	protected void init() {
+		if (this.mapWidget != null) {
+			this.mapWidget.close();
+		}
+
+		int mapX = 20;
+		int mapY = 20;
+		int mapWidth = this.width - 40;
+		int mapHeight = this.height - 60;
+		this.mapWidget = new SlippyMapWidget(mapX, mapY, mapWidth, mapHeight);
+
+		this.markerComponent = new MarkerMapComponent(new SlippyMapPoint(this.initialLatitude, this.initialLongitude))
+				.allowMovement();
+		this.mapWidget.addComponent(this.markerComponent);
+		this.mapWidget.getMap().focus(this.initialLatitude, this.initialLongitude, DEFAULT_ZOOM);
+
+		Geocoder geocoder = new NominatimGeocoder();
+		this.searchWidget = new PlaceSearchWidget(mapX + 5, mapY + 5, 200, 20, geocoder, this::handleSearch);
+
+		this.addRenderableOnly(this.mapWidget);
+		this.addRenderableWidget(this.searchWidget);
+
+		int buttonY = this.height - 28;
+		this.addRenderableWidget(Button.builder(Component.translatable("gui.earth.teleport"), button -> {
+			sendTeleport();
+		}).bounds(this.width / 2 - 154, buttonY, 150, 20).build());
+
+		this.addRenderableWidget(Button.builder(Component.translatable("gui.cancel"), button -> {
+			closeScreen();
+		}).bounds(this.width / 2 + 4, buttonY, 150, 20).build());
+
+		this.addWidget(this.mapWidget);
+	}
+
+	@Override
+	protected void setInitialFocus() {
+		if (this.searchWidget != null) {
+			this.setInitialFocus(this.searchWidget);
+		}
+	}
+
+	private void handleSearch(double latitude, double longitude) {
+		this.markerComponent.moveMarker(latitude, longitude);
+		this.mapWidget.getMap().focus(latitude, longitude, 12);
+	}
+
+    private void sendTeleport() {
+        if (this.markerComponent == null) {
+            return;
+        }
+        SlippyMapPoint marker = this.markerComponent.getMarker();
+        if (marker == null || this.minecraft == null) {
+            return;
+        }
+        if (!NetworkManager.canServerReceive(GeoTpTeleportPayload.TYPE)) {
+            if (this.minecraft.player != null) {
+                this.minecraft.player.displayClientMessage(
+                        Component.literal("Tellus: Server does not accept GeoTP requests."),
+                        true
+                );
+            }
+            closeScreen();
+            return;
+        }
+        NetworkManager.sendToServer(new GeoTpTeleportPayload(marker.getLatitude(), marker.getLongitude()));
+        closeScreen();
+    }
+
+	private void closeScreen() {
+		if (this.minecraft != null) {
+			this.minecraft.setScreen(this.parent);
+		}
+	}
+
+	@Override
+	public void render(@NonNull GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+		graphics.fill(0, 0, this.width, this.height, 0xC0101010);
+		graphics.drawCenteredString(this.font, this.title, this.width / 2, 4, 0xFFFFFF);
+		super.render(graphics, mouseX, mouseY, delta);
+	}
+
+	@Override
+	public void tick() {
+		super.tick();
+		if (this.searchWidget != null) {
+			this.searchWidget.tick();
+		}
+	}
+
+	@Override
+	public void onClose() {
+		closeScreen();
+	}
+
+	@Override
+	public void removed() {
+		if (this.mapWidget != null) {
+			this.mapWidget.close();
+		}
+		if (this.searchWidget != null) {
+			this.searchWidget.close();
+		}
+	}
+}
