@@ -7,6 +7,9 @@ import com.yucareux.tellus.worldgen.EarthChunkGenerator;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
 import com.mojang.serialization.Lifecycle;
 import com.mojang.blaze3d.platform.InputConstants;
+
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -50,6 +53,8 @@ import org.lwjgl.glfw.GLFW;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import static com.yucareux.tellus.client.client.screen.EarthCustomizeScreen.ToggleDefinition.text;
+
 public class EarthCustomizeScreen extends Screen {
 	private static final @NonNull Component TITLE = Objects.requireNonNull(
 			Component.translatable("options.tellus.customize_world_title.name"),
@@ -92,7 +97,6 @@ public class EarthCustomizeScreen extends Screen {
 	private long previewDirtyAt = -1L;
 	private double spawnLatitude = EarthGeneratorSettings.DEFAULT_SPAWN_LATITUDE;
 	private double spawnLongitude = EarthGeneratorSettings.DEFAULT_SPAWN_LONGITUDE;
-	private @Nullable CategoryDefinition activeCategory;
 
 	public EarthCustomizeScreen(CreateWorldScreen parent, WorldCreationContext worldCreationContext) {
 		super(TITLE);
@@ -425,6 +429,9 @@ public class EarthCustomizeScreen extends Screen {
 				"distant_horizons_water_resolver",
 				EarthGeneratorSettings.DEFAULT.distantHorizonsWaterResolver()
 		);
+        boolean realtimeTime = this.findToggleValue("realtime_time", EarthGeneratorSettings.DEFAULT.realtimeTime());
+        boolean realtimeWeather = this.findToggleValue("realtime_weather", EarthGeneratorSettings.DEFAULT.realtimeWeather());
+        boolean historicalSnow = this.findToggleValue("historical_snow", EarthGeneratorSettings.DEFAULT.historicalSnow());
 		EarthGeneratorSettings.DistantHorizonsRenderMode renderMode = this.findRenderMode(
 				"distant_horizons_render_mode",
 				EarthGeneratorSettings.DEFAULT.distantHorizonsRenderMode()
@@ -468,6 +475,9 @@ public class EarthCustomizeScreen extends Screen {
                 structureSettings,
                 addTrailRuins,
 				distantHorizonsWaterResolver,
+                realtimeTime,
+                realtimeWeather,
+                historicalSnow,
 				renderMode,
                 villageSettings
 		);
@@ -594,6 +604,13 @@ public class EarthCustomizeScreen extends Screen {
 				comingSoonButton()
 		)));
 
+        categories.add(new CategoryDefinition("realtime", List.of(
+                toggle("realtime_time", EarthGeneratorSettings.DEFAULT.realtimeTime()),
+                toggle("realtime_weather", EarthGeneratorSettings.DEFAULT.realtimeWeather()),
+                toggle("historical_snow", EarthGeneratorSettings.DEFAULT.historicalSnow()),
+                text("current_status", getCurrentTimeFormatted())
+        )));
+
         categories.add(new CategoryDefinition("experimental", List.of(
                 toggle("village_flat", EarthGeneratorSettings.DEFAULT.villageSettings().flatVillages()),
                 slider("village_radius", 64.0, 8.0, 128.0, 4.0)
@@ -690,6 +707,18 @@ public class EarthCustomizeScreen extends Screen {
 		}
 		return String.format(Locale.ROOT, "%.0f blocks", value);
 	}
+
+    public static String getCurrentTimeFormatted() {
+        // 1. Get the current system time
+        LocalTime now = LocalTime.now();
+
+        // 2. Define the pattern:
+        // hh = 12-hour clock, mm = minutes, a = AM/PM marker
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("hh:mm a", Locale.ROOT);
+
+        // 3. Format and return
+        return now.format(formatter);
+    }
 
 	private static @NonNull Component settingName(String key) {
 		return Objects.requireNonNull(Component.translatable("property.tellus." + key + ".name"), "settingName");
@@ -849,7 +878,6 @@ public class EarthCustomizeScreen extends Screen {
 
 	private void showCategories() {
 		this.list.clear();
-		this.activeCategory = null;
 		for (CategoryDefinition category : this.categories) {
 			Component label = Objects.requireNonNull(category.getLabel(), "categoryLabel");
 			Button button = Button.builder(label, btn -> this.showCategory(category))
@@ -862,7 +890,6 @@ public class EarthCustomizeScreen extends Screen {
 
 	private void showCategory(CategoryDefinition category) {
 		this.list.clear();
-		this.activeCategory = category;
 		Component backLabel = Objects.requireNonNull(Component.translatable("gui.back"), "backLabel");
 		Button back = Button.builder(backLabel, btn -> this.showCategories())
 				.bounds(0, 0, this.list.getRowWidth(), ENTRY_HEIGHT)
@@ -895,7 +922,7 @@ public class EarthCustomizeScreen extends Screen {
 
     }
 
-	private static final class ToggleDefinition implements SettingDefinition {
+	static final class ToggleDefinition implements SettingDefinition {
 		private final String key;
 		private boolean value;
 		private boolean locked;
@@ -904,6 +931,9 @@ public class EarthCustomizeScreen extends Screen {
 			this.key = key;
 			this.value = defaultValue;
 		}
+        static TextDefinition text(String key, Object... args) {
+            return new TextDefinition(key, args);
+        }
 
 		private ToggleDefinition locked(boolean locked) {
 			this.locked = locked;
@@ -1154,4 +1184,42 @@ public class EarthCustomizeScreen extends Screen {
 			};
 		}
 	}
+    private static final class TextDefinition implements SettingDefinition {
+        private final Component label;
+
+        private TextDefinition(String key, Object... args) {
+            // Creates a translatable component with arguments
+            this.label = Component.translatable("text.tellus." + key, args)
+                    .withStyle(ChatFormatting.GRAY); // Default style (optional)
+        }
+
+        @Override
+        public AbstractWidget createWidget(Runnable onChange) {
+            // We create an anonymous AbstractWidget because we just want to render text,
+            // not handle interaction.
+            AbstractWidget widget = new AbstractWidget(0, 0, 0, ENTRY_HEIGHT, this.label) {
+                @Override
+                protected void renderWidget(@NonNull GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+                    // Draw the text centered within the list row
+                    graphics.drawCenteredString(
+                            Minecraft.getInstance().font,
+                            this.getMessage(),
+                            this.getX() + this.width / 2,
+                            this.getY() + (this.height - 8) / 2, // Vertically center (8 is approx font height)
+                            0xFFFFFF // White text (or use .withStyle color from component)
+                    );
+                }
+
+                @Override
+                protected void updateWidgetNarration(net.minecraft.client.gui.narration.NarrationElementOutput narrationElementOutput) {
+                    // No narration needed for static text, or add default narration if desired
+                }
+            };
+
+            // Disable interaction so it doesn't look like a button on hover
+            widget.active = false;
+            return widget;
+        }
+    }
 }
+

@@ -3,6 +3,7 @@
   "package": "com.yucareux.tellus.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "BiomePrecipitationMixin"
   ],
   "injectors": {
     "defaultRequire": 1

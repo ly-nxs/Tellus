@@ -6,6 +6,7 @@ import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.world.data.cover.TellusLandCoverSource;
 import com.yucareux.tellus.world.data.elevation.TellusElevationSource;
 import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
+import com.yucareux.tellus.world.realtime.TellusRealtimeState;
 import com.yucareux.tellus.worldgen.geology.TellusGeologyGenerator;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -29,6 +30,7 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.QuartPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.StructureTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
@@ -44,6 +46,7 @@ import net.minecraft.world.level.biome.BiomeGenerationSettings;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.tags.BiomeTags;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.levelgen.carver.ConfiguredWorldCarver;
@@ -777,42 +780,7 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		return BADLANDS_BANDS[bandIndex];
 	}
 
-	private @NonNull BlockState resolveSurfaceTop(
-			@NonNull RandomState random,
-			int worldX,
-			int worldZ,
-			int surface,
-			boolean underwater,
-			int coverClass
-	) {
-		Holder<Biome> biome = this.biomeSource.getNoiseBiome(
-				QuartPos.fromBlock(worldX),
-				QuartPos.fromBlock(surface),
-				QuartPos.fromBlock(worldZ),
-				random.sampler()
-		);
-		SurfacePalette palette = selectSurfacePalette(biome, worldX, worldZ, surface, underwater, coverClass);
-		if (palette == null) {
-			return Blocks.STONE.defaultBlockState();
-		}
-		return underwater ? palette.underwaterTop() : palette.top();
-	}
 
-	private @NonNull BlockState resolveSurfaceTop(
-			Holder<Biome> biome,
-			int worldX,
-			int worldZ,
-			int surface,
-			boolean underwater,
-			int slopeDiff,
-			int coverClass
-	) {
-		SurfacePalette palette = selectSurfacePalette(biome, worldX, worldZ, surface, underwater, slopeDiff, coverClass);
-		if (palette == null) {
-			return Blocks.STONE.defaultBlockState();
-		}
-		return underwater ? palette.underwaterTop() : palette.top();
-	}
 
 	public @NonNull BlockState resolveLodSurfaceBlock(int worldX, int worldZ, int surface, boolean underwater) {
 		if (this.biomeSource instanceof EarthBiomeSource earthBiomeSource) {
@@ -1153,19 +1121,6 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		return true;
 	}
 
-	private static boolean isUndergroundStep(int step) {
-		GenerationStep.Decoration[] values = GenerationStep.Decoration.values();
-		if (step < 0 || step >= values.length) {
-			return false;
-		}
-		GenerationStep.Decoration decoration = values[step];
-		return decoration == GenerationStep.Decoration.UNDERGROUND_STRUCTURES
-				|| decoration == GenerationStep.Decoration.STRONGHOLDS
-				|| decoration == GenerationStep.Decoration.UNDERGROUND_ORES
-				|| decoration == GenerationStep.Decoration.UNDERGROUND_DECORATION
-				|| decoration == GenerationStep.Decoration.FLUID_SPRINGS;
-	}
-
 	private boolean isStructureSetEnabled(Holder<StructureSet> structureSet) {
 		for (StructureSet.StructureSelectionEntry entry : structureSet.value().structures()) {
 			if (!isStructureEnabled(entry.structure())) {
@@ -1433,6 +1388,73 @@ public final class EarthChunkGenerator extends ChunkGenerator {
 		cursor.set(worldX, surface, worldZ);
 		chunk.setBlockState(cursor, Blocks.SNOW_BLOCK.defaultBlockState());
 	}
+    public void applyRealtimeSnowCover(WorldGenLevel level, ChunkAccess chunk) {
+        if (!TellusRealtimeState.isHistoricalSnowEnabled()
+                && !(TellusRealtimeState.isWeatherEnabled()
+                && TellusRealtimeState.precipitationMode() == TellusRealtimeState.PrecipitationMode.SNOW)) {
+            return;
+        }
+        int updateFlags = level instanceof ServerLevel ? Block.UPDATE_CLIENTS : Block.UPDATE_NONE;
+        ChunkPos pos = chunk.getPos();
+        int chunkMinX = pos.getMinBlockX();
+        int chunkMinZ = pos.getMinBlockZ();
+        int minY = chunk.getMinY();
+        int maxY = minY + chunk.getHeight();
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        BlockState snowLayer = Blocks.SNOW.defaultBlockState();
+
+        for (int localX = 0; localX < 16; localX++) {
+            int worldX = chunkMinX + localX;
+            for (int localZ = 0; localZ < 16; localZ++) {
+                int worldZ = chunkMinZ + localZ;
+                if (!TellusRealtimeState.shouldApplySnow(worldX, worldZ)) {
+                    continue;
+                }
+                int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, worldX, worldZ);
+                if (surface < minY || surface + 1 >= maxY) {
+                    continue;
+                }
+                int slopeDiff = sampleSlopeDiff(level, worldX, worldZ, surface);
+                if (slopeDiff >= SNOW_SLOPE_DIFF) {
+                    continue;
+                }
+                cursor.set(worldX, surface, worldZ);
+                BlockState surfaceState = level.getBlockState(cursor);
+                if (!surfaceState.getFluidState().isEmpty()) {
+                    continue;
+                }
+                BlockPos above = cursor.above();
+                if (!level.getBlockState(above).isAir()) {
+                    continue;
+                }
+                if (!snowLayer.canSurvive(level, above)) {
+                    continue;
+                }
+                level.setBlock(above, snowLayer, updateFlags);
+                if (surfaceState.hasProperty(BlockStateProperties.SNOWY)
+                        && !surfaceState.getValue(BlockStateProperties.SNOWY)) {
+                    BlockState snowySurface = Objects.requireNonNull(
+                            surfaceState.setValue(BlockStateProperties.SNOWY, Boolean.TRUE),
+                            "snowySurface"
+                    );
+                    level.setBlock(cursor, snowySurface, updateFlags);
+                }
+            }
+        }
+    }
+
+    private static int sampleSlopeDiff(WorldGenLevel level, int worldX, int worldZ, int surface) {
+        int step = SLOPE_SAMPLE_STEP;
+        int east = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, worldX + step, worldZ);
+        int west = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, worldX - step, worldZ);
+        int north = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, worldX, worldZ - step);
+        int south = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, worldX, worldZ + step);
+
+        return Math.max(
+                Math.max(Math.abs(east - surface), Math.abs(west - surface)),
+                Math.max(Math.abs(north - surface), Math.abs(south - surface))
+        );
+    }
 
 	private record ColumnHeights(int terrainSurface, int waterSurface, boolean hasWater) {
 	}
