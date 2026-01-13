@@ -4,10 +4,4 @@ architectury {
 
 dependencies {
     modImplementation "dev.architectury:architectury:${rootProject.architectury_api_version}"
-
-    // XZ compression library
-    implementation "org.tukaani:xz:1.10"
-
-    // Distant Horizons API (common)
-    modCompileOnly "maven.modrinth:DistantHorizonsApi:${rootProject.distant_horizons_api_version}"
 }

@@ -111,6 +111,7 @@
   "property.tellus.realtime_weather.tooltip": "Uses real-world weather for rain, thunder, and snow",
   "property.tellus.historical_snow.name": "Historical Snow Coverage",
   "property.tellus.historical_snow.tooltip": "Applies snow based on recent snowfall and temperature history",
+  "text.tellus.current_status": "Time: %s",
   "property.tellus.village_flat.name": "Village Flatness Check",
   "property.tellus.village_radius.name": "Village Radius",
   "property.tellus.village_height_range.name": "Village Height Range",

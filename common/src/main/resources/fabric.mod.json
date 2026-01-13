@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "tellus-common",
+  "version": "${version}",
+  "name": "Tellus Common",
+  "description": "Common library/code for the Tellus mod.",
+  "authors": [
+    "YourName"
+  ],
+  "contact": {
+    "homepage": "https://example.com",
+    "sources": "https://github.com/YourName/Tellus"
+  },
+  "license": "MIT",
+  "icon": "assets/tellus/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [],
+    "client": []
+  },
+  "mixins": [
+    "tellus.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "java": ">=17"
+  }
+}

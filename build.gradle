@@ -38,7 +38,11 @@ subprojects {
         mappings loom.officialMojangMappings()
 
         include "org.tukaani:xz:1.10"
+        // XZ compression library
+        implementation "org.tukaani:xz:1.10"
 
+        // Distant Horizons API (common)
+        modCompileOnly "maven.modrinth:DistantHorizonsApi:${rootProject.distant_horizons_api_version}"
         // Distant Horizons (if available for NeoForge)
         modImplementation "maven.modrinth:DistantHorizonsApi:${rootProject.distant_horizons_api_version}"
         modRuntimeOnly "maven.modrinth:DistantHorizons:${rootProject.distant_horizons_version}"
